@@ -17,6 +17,8 @@
   .row { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
   .row > * { flex:1; }
   small { color:#aaa; }
+  #upd { display:none; margin:6px 0 10px; padding:10px; border:1px solid var(--acc); border-radius:10px; background:#1b2a40; }
+  #upd button { width:100%; margin-top:8px; }
 
   /* Munkafelület: a kép a teljes ablakot kitölti */
   #work { display:none; position:fixed; inset:0; background:#000; }
@@ -46,6 +48,7 @@
 
 <div id="setup">
   <h2>Képválogató <span id="ver" style="font-size:.6em;font-weight:400;color:#aaa"></span></h2>
+  <div id="upd"><div id="updTxt"></div><small>A kiválasztott képeket frissítés után újra ki kell választanod, a besorolásaid megmaradnak.</small><button class="acc" id="updBtn">⟳ Frissítés</button></div>
   <div class="row"><button class="acc" id="pick">📷 Képek kiválasztása</button></div>
   <input type="file" id="files"
          accept="image/*,.jpg,.jpeg,.jfif,.pjpeg,.pjp,.png,.webp,.gif,.bmp,.avif"
@@ -80,7 +83,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const VERSION = 'v1.5';
+const VERSION = 'v1.6';
 $('ver').textContent = VERSION;
 document.title = 'Képválogató ' + VERSION;
 const LS_CATS = 'kv_cats', LS_ASSIGN = 'kv_assign';
@@ -320,6 +323,7 @@ function toSetup() {
   urls.clear();
   $('work').style.display = 'none'; $('setup').style.display = 'block';
   $('loaded').innerHTML = `<small>${loadedSummary()}</small>`;
+  checkUpdate();
 }
 function saveAndExit() {
   if (Object.keys(assign).length) saveTxt();
@@ -343,7 +347,35 @@ $('cp').onclick = async () => {
 $('reset').onclick = () => {
   if (confirm('Biztosan törlöd az összes eddigi besorolást?')) { assign = {}; saveAssign(); updateStat(); }
 };
+// ---- frissítésellenőrzés ----
+// Letölti a saját fájlját a gyorsítótár megkerülésével, és megnézi a verziószámot.
+// Csak jelez, magától sosem tölt újra.
+const verNum = v => (String(v).match(/\d+/g) || []).map(Number);
+function isNewer(a, b) {            // a újabb-e b-nél?
+  const x = verNum(a), y = verNum(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+let lastCheck = 0;
+async function checkUpdate() {
+  if (!/^https?:$/.test(location.protocol)) return;   // letöltött fájlnál nincs értelme
+  if (Date.now() - lastCheck < 30000) return;
+  lastCheck = Date.now();
+  try {
+    const r = await fetch(location.pathname + '?_=' + Date.now(), {cache:'no-store'});
+    if (!r.ok) return;
+    const m = (await r.text()).match(/const VERSION = '([^']+)'/);
+    if (!m || !isNewer(m[1], VERSION)) { $('upd').style.display = 'none'; return; }
+    $('updTxt').textContent = `Új verzió elérhető: ${m[1]} (most: ${VERSION})`;
+    $('updBtn').onclick = () => { location.href = location.pathname + '?v=' + encodeURIComponent(m[1]); };
+    $('upd').style.display = 'block';
+  } catch {}                       // nincs internet: csendben marad
+}
 load();
+checkUpdate();
 </script>
 </body>
 </html>
