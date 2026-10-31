@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Képválogató</title>
+<style>
+  :root { --bg:#161616; --fg:#eee; --bt:#2c2c2c; --acc:#3d8bfd; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; touch-action:manipulation; overflow:hidden; }
+  button { background:var(--bt); color:var(--fg); border:1px solid #444; border-radius:10px; padding:12px 8px; font-size:16px; }
+  button:active { background:#444; }
+  button.acc { background:var(--acc); border-color:var(--acc); }
+  #setup { padding:14px; overflow:auto; height:100dvh; }
+  #setup h2 { margin:.2em 0 .6em; }
+  textarea { width:100%; height:180px; background:#222; color:var(--fg); border:1px solid #444; border-radius:8px; padding:8px; font-size:16px; }
+  .row { display:flex; gap:8px; margin:10px 0; flex-wrap:wrap; }
+  .row > * { flex:1; }
+  small { color:#aaa; }
+
+  /* Munkafelület: a kép a teljes ablakot kitölti */
+  #work { display:none; position:fixed; inset:0; background:#000; }
+  #stage { position:absolute; inset:0; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; -webkit-user-drag:none; transform-origin:50% 50%; }
+
+  /* Kis tájékoztató a bal felső sarokban */
+  #info { position:absolute; top:8px; left:8px; max-width:55vw; pointer-events:none; z-index:4;
+          background:rgba(0,0,0,.55); border-radius:12px; padding:5px 10px; font-size:14px; line-height:1.3; }
+  #info .fn { font-size:12px; color:#bbb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* Gombpanel: a kép megérintésére jön elő, jobb oldalt oszlopban. Legfelül: Vissza, Mentés */
+  #cats { position:absolute; top:8px; right:8px; bottom:8px; display:none; direction:rtl;
+          grid-auto-flow:column; grid-auto-columns:max-content; gap:6px; align-content:start; z-index:5;
+          max-width:calc(100% - 16px); }
+  #cats.open { display:grid; }
+  #cats button { direction:ltr; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+                 max-width:70vw; padding:18px 24px; font-size:25px; font-weight:600; border-radius:14px;
+                 background:rgba(34,34,34,.93); border-color:#666; }
+  #cats button.act { background:rgba(60,60,70,.95); border-color:#999; }
+  #cats button.save { background:rgba(61,139,253,.95); border-color:var(--acc); }
+
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:20px; display:none; z-index:9; max-width:90vw; text-align:center; }
+</style>
+</head>
+<body>
+
+<div id="setup">
+  <h2>Képválogató <span id="ver" style="font-size:.6em;font-weight:400;color:#aaa"></span></h2>
+  <div class="row"><button class="acc" id="pick">📷 Képek kiválasztása</button></div>
+  <input type="file" id="files"
+         accept="image/*,.jpg,.jpeg,.jfif,.pjpeg,.pjp,.png,.webp,.gif,.bmp,.avif"
+         multiple hidden>
+  <div id="loaded"><small>Még nincs kép betöltve.</small></div>
+
+  <h3>Kategóriák</h3>
+  <small>Soronként egy mappanév. A telefon mentve tartja, legközelebb is megvan.</small>
+  <textarea id="catText" placeholder="pl.&#10;Tájkép&#10;Család&#10;Étel"></textarea>
+  <div class="row">
+    <button id="importCats">Kategóriák betöltése txt-ből</button>
+    <input type="file" id="catFile" accept=".txt,text/plain" hidden>
+  </div>
+
+  <div class="row"><button class="acc" id="start">▶ Indítás</button></div>
+  <div class="row">
+    <button id="dl">⬇ Eredmény mentése (txt)</button>
+    <button id="cp">📋 Másolás</button>
+  </div>
+  <div class="row"><button id="reset">Eddigi besorolások törlése</button></div>
+  <small id="stat"></small>
+</div>
+
+<div id="work">
+  <div id="stage">
+    <img id="img" alt="" draggable="false">
+    <div id="info"><div id="pos"></div><div class="fn" id="fn"></div></div>
+    <div id="cats"></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const VERSION = 'v1.5';
+$('ver').textContent = VERSION;
+document.title = 'Képválogató ' + VERSION;
+const LS_CATS = 'kv_cats', LS_ASSIGN = 'kv_assign';
+const IMG_EXT = /\.(jpe?g|jfif|pjpe?g|pjp|png|webp|gif|bmp|avif|heic|heif)$/i;
+const ZOOM = 2.5;
+let files = [];            // minden betöltött kép, névsorban
+let queue = [];            // csak a MÉG BESOROLATLAN képek (ezek között lapozunk)
+let qi = 0;                // aktuális hely a sorban
+let rank = new Map();      // kép -> eredeti sorszám (visszavonásnál a helyére kerül vissza)
+let cats = [];
+let assign = {};           // fájlnév -> kategória
+let history = [];          // [{file}] a visszavonáshoz
+const urls = new Map();    // kép -> objektum URL (csak az előző/aktuális/következő él)
+
+const natural = (a, b) => a.name.localeCompare(b.name, undefined, {numeric:true, sensitivity:'base'});
+const isImage = f => (f.type && f.type.startsWith('image/')) || IMG_EXT.test(f.name);
+
+function load() {
+  try { assign = JSON.parse(localStorage.getItem(LS_ASSIGN) || '{}'); } catch { assign = {}; }
+  $('catText').value = localStorage.getItem(LS_CATS) || '';
+  updateStat();
+}
+function saveAssign() { try { localStorage.setItem(LS_ASSIGN, JSON.stringify(assign)); } catch {} }
+function parseCats() {
+  cats = $('catText').value.split('\n').map(s => s.trim()).filter(Boolean);
+  try { localStorage.setItem(LS_CATS, cats.join('\n')); } catch {}
+}
+function toast(t, ms=1500) { const el = $('toast'); el.textContent = t; el.style.display='block'; clearTimeout(toast.t); toast.t = setTimeout(()=>el.style.display='none', ms); }
+function updateStat() { $('stat').textContent = `Eddig besorolva: ${Object.keys(assign).length} kép`; }
+function loadedSummary() {
+  const done = files.filter(f => assign[f.name]).length;
+  return `${files.length} kép betöltve, ebből ${done} már besorolva (ezeket nem mutatja), ${files.length - done} maradt.`;
+}
+
+$('pick').onclick = () => $('files').click();
+$('files').onchange = e => {
+  const all = [...e.target.files];
+  files = all.filter(isImage).sort(natural);
+  const skipped = all.filter(f => !isImage(f));
+  let html = `<small>${loadedSummary()}</small>`;
+  if (skipped.length) {
+    const names = skipped.slice(0, 5).map(f => f.name).join(', ');
+    html += `<br><small>⚠ ${skipped.length} fájl kihagyva (nem kép): ${names}${skipped.length > 5 ? ' …' : ''}</small>`;
+  }
+  $('loaded').innerHTML = html;
+};
+$('importCats').onclick = () => $('catFile').click();
+$('catFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('catText').value = (await f.text()).replace(/\r/g,'');
+  parseCats(); toast('Kategóriák betöltve');
+};
+
+// ---- indítás ----
+$('start').onclick = () => {
+  parseCats();
+  if (!files.length) return alert('Előbb válassz képeket.');
+  if (!cats.length) return alert('Adj meg legalább egy kategóriát.');
+  queue = files.filter(f => !assign[f.name]);
+  if (!queue.length) return alert('Minden betöltött kép már be van sorolva.');
+  rank = new Map(files.map((f, i) => [f, i]));
+  history = []; qi = 0;
+  buildPanel();
+  $('setup').style.display = 'none'; $('work').style.display = 'flex';
+  show();
+  toast('Koppints a képre a mappákhoz · húzd el a lapozáshoz · dupla koppintás = nagyítás', 4000);
+};
+
+// ---- gombpanel: Vissza, Mentés, majd a mappák ----
+function buildPanel() {
+  const box = $('cats');
+  box.innerHTML = ''; box.classList.remove('open');
+  const mk = (label, cls, fn) => {
+    const b = document.createElement('button');
+    b.textContent = label; if (cls) b.className = cls;
+    b.onclick = ev => { ev.stopPropagation(); fn(); };
+    box.appendChild(b);
+  };
+  mk('↩ Vissza', 'act', undo);
+  mk('💾 Mentés', 'save', saveAndExit);
+  cats.forEach(c => mk(c, '', () => choose(c)));
+}
+function openCats() {
+  const box = $('cats');
+  box.classList.add('open');
+  const first = box.firstElementChild; if (!first) return;
+  const bh = first.offsetHeight + 6;
+  const rows = Math.max(1, Math.floor(($('stage').clientHeight - 16 + 6) / bh));
+  box.style.gridTemplateRows = `repeat(${rows}, auto)`;
+}
+function closeCats() { $('cats').classList.remove('open'); }
+
+// ---- nagyítás (dupla koppintás) ----
+let zoom = 1, tx = 0, ty = 0;
+function applyZoom() { $('img').style.transform = zoom === 1 ? '' : `translate(${tx}px,${ty}px) scale(${zoom})`; }
+function resetZoom() { zoom = 1; tx = ty = 0; applyZoom(); }
+function clampPan() {
+  const img = $('img'), st = $('stage');
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  if (!nw || !nh) { tx = ty = 0; return; }
+  const W = st.clientWidth, H = st.clientHeight, s0 = Math.min(W / nw, H / nh);
+  const mx = Math.max(0, (nw * s0 * zoom - W) / 2), my = Math.max(0, (nh * s0 * zoom - H) / 2);
+  tx = Math.max(-mx, Math.min(mx, tx));
+  ty = Math.max(-my, Math.min(my, ty));
+}
+function toggleZoom(x, y) {
+  closeCats();
+  if (zoom > 1) { resetZoom(); return; }
+  const r = $('stage').getBoundingClientRect();
+  zoom = ZOOM;
+  // úgy nagyít, hogy a megkoppintott pont a helyén maradjon
+  tx = (x - r.left - r.width / 2) * (1 - zoom);
+  ty = (y - r.top - r.height / 2) * (1 - zoom);
+  clampPan(); applyZoom();
+}
+
+// ---- érintés: koppintás, dupla koppintás, elhúzás ----
+let ptr = null, lastTap = null, tapTimer = null;
+const st = $('stage');
+function cancelTap() { clearTimeout(tapTimer); lastTap = null; }
+function tap(x, y) {
+  const now = Date.now();
+  if (lastTap && now - lastTap.t < 300 && Math.hypot(x - lastTap.x, y - lastTap.y) < 40) {
+    cancelTap(); toggleZoom(x, y); return;
+  }
+  lastTap = {t:now, x, y};
+  tapTimer = setTimeout(() => {          // egyszeri koppintás: gombpanel ki/be
+    lastTap = null;
+    $('cats').classList.contains('open') ? closeCats() : openCats();
+  }, 280);
+}
+st.addEventListener('pointerdown', e => {
+  if (e.target.closest('#cats') || e.isPrimary === false) { ptr = null; return; }
+  ptr = {x:e.clientX, y:e.clientY, sx:tx, sy:ty, moved:false};
+  try { st.setPointerCapture(e.pointerId); } catch {}
+});
+st.addEventListener('pointermove', e => {
+  if (!ptr || zoom <= 1) return;         // nagyítva: húzás = a kép mozgatása
+  const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
+  if (Math.abs(dx) > 8 || Math.abs(dy) > 8) ptr.moved = true;
+  tx = ptr.sx + dx; ty = ptr.sy + dy; clampPan(); applyZoom();
+});
+st.addEventListener('pointercancel', () => { ptr = null; });
+st.addEventListener('pointerup', e => {
+  if (!ptr) return;
+  const p = ptr; ptr = null;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  if (zoom > 1 && p.moved) return;
+  if (zoom === 1 && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+    go(dx < 0 ? 1 : -1);                 // balra húzás = következő, jobbra húzás = előző
+    return;
+  }
+  if (Math.abs(dx) < 15 && Math.abs(dy) < 15) tap(e.clientX, e.clientY);
+});
+
+// ---- megjelenítés és lapozás ----
+function urlFor(f) {
+  if (!urls.has(f)) urls.set(f, URL.createObjectURL(f));
+  return urls.get(f);
+}
+function pruneUrls() {
+  const keep = new Set([queue[qi - 1], queue[qi], queue[qi + 1]]);
+  for (const [f, u] of urls) if (!keep.has(f)) { URL.revokeObjectURL(u); urls.delete(f); }
+}
+function updateInfo() {
+  const f = queue[qi];
+  if (!f) { $('pos').textContent = 'Nincs több besorolatlan kép 🎉'; $('fn').textContent = ''; return; }
+  $('pos').textContent = `${qi + 1}/${queue.length}`;
+  $('fn').textContent = f.name;
+}
+function show() {
+  resetZoom();
+  const f = queue[qi];
+  const img = $('img');
+  if (!f) { img.removeAttribute('src'); updateInfo(); return; }
+  img.onerror = () => toast('Nem jeleníthető meg: ' + f.name, 2500);
+  img.src = urlFor(f);
+  updateInfo();
+  // a szomszédos képeket előre betölti, hogy a lapozás gyors legyen
+  for (const n of [queue[qi + 1], queue[qi - 1]]) if (n) { const im = new Image(); im.src = urlFor(n); }
+  pruneUrls();
+}
+function go(delta) {
+  cancelTap();
+  if (!queue.length) return;
+  const n = qi + delta;
+  if (n < 0) { toast('Ez az első kép'); return; }
+  if (n >= queue.length) { toast('Ez az utolsó kép'); return; }
+  closeCats();
+  qi = n; show();
+}
+
+// ---- besorolás és visszavonás ----
+function choose(cat) {
+  const f = queue[qi];
+  if (!f) return;
+  assign[f.name] = cat; saveAssign(); updateStat();
+  history.push({file:f});
+  queue.splice(qi, 1);                   // a besorolt kép kikerül a sorból
+  cancelTap(); closeCats();
+  if (qi >= queue.length) qi = queue.length - 1;   // az utolsó volt: az előzőre lép
+  if (!queue.length) { qi = 0; show(); toast('Minden kép besorolva 🎉', 3000); return; }
+  toast(`→ ${cat}`);
+  show();
+}
+function undo() {
+  const h = history.pop();
+  if (!h) { toast('Nincs mit visszavonni'); return; }
+  delete assign[h.file.name]; saveAssign(); updateStat();
+  const r = rank.get(h.file);            // az eredeti helyére kerül vissza a sorban
+  let pos = queue.findIndex(q => rank.get(q) > r);
+  if (pos < 0) pos = queue.length;
+  queue.splice(pos, 0, h.file);
+  qi = pos;
+  cancelTap(); closeCats();
+  show();
+  toast('Visszavonva');
+}
+
+// ---- mentés ----
+function resultText() {
+  return Object.entries(assign).map(([n, c]) => `${n}\t${c}`).join('\n') + '\n';
+}
+function saveTxt() {
+  if (!Object.keys(assign).length) { alert('Még nincs besorolt kép.'); return; }
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  const fn = `valogatas_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.txt`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([resultText()], {type:'text/plain;charset=utf-8'}));
+  a.download = fn; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('Mentve: ' + fn, 3000);
+}
+function toSetup() {
+  cancelTap(); closeCats(); resetZoom();
+  for (const u of urls.values()) URL.revokeObjectURL(u);
+  urls.clear();
+  $('work').style.display = 'none'; $('setup').style.display = 'block';
+  $('loaded').innerHTML = `<small>${loadedSummary()}</small>`;
+}
+function saveAndExit() {
+  if (Object.keys(assign).length) saveTxt();
+  toSetup();
+}
+
+// Billentyűk (asztali böngészőhöz)
+document.addEventListener('keydown', e => {
+  if ($('work').style.display !== 'flex') return;
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); go(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+  else if (e.key === 'Backspace') undo();
+  else if (/^[0-9]$/.test(e.key)) { const n = e.key === '0' ? 9 : +e.key - 1; if (cats[n]) choose(cats[n]); }
+});
+
+$('dl').onclick = saveTxt;
+$('cp').onclick = async () => {
+  try { await navigator.clipboard.writeText(resultText()); toast('Vágólapra másolva'); }
+  catch { toast('Másolás nem sikerült'); }
+};
+$('reset').onclick = () => {
+  if (confirm('Biztosan törlöd az összes eddigi besorolást?')) { assign = {}; saveAssign(); updateStat(); }
+};
+load();
+</script>
+</body>
+</html>
