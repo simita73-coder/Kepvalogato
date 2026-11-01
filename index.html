@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Képválogató</title>
 <style>
-  :root { --bg:#161616; --fg:#eee; --bt:#2c2c2c; --acc:#3d8bfd; }
+  :root { --bg:#161616; --fg:#eee; --bt:#2c2c2c; --acc:#3d8bfd; --bh:68px; --bfs:25px; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; touch-action:manipulation; overflow:hidden; }
   button { background:var(--bt); color:var(--fg); border:1px solid #444; border-radius:10px; padding:12px 8px; font-size:16px; }
@@ -19,36 +19,44 @@
   small { color:#aaa; }
   #upd { display:none; margin:6px 0 10px; padding:10px; border:1px solid var(--acc); border-radius:10px; background:#1b2a40; }
   #upd button { width:100%; margin-top:8px; }
+  .slider { margin:10px 0; }
+  .slider label { display:block; margin-bottom:4px; }
+  .slider input { width:100%; }
 
   /* Munkafelület: a kép a teljes ablakot kitölti */
   #work { display:none; position:fixed; inset:0; background:#000; }
   #stage { position:absolute; inset:0; overflow:hidden; touch-action:none; user-select:none; -webkit-user-select:none; }
   #img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; -webkit-user-drag:none; transform-origin:50% 50%; }
 
-  /* Kis tájékoztató a bal felső sarokban */
+  /* Tájékoztató a bal felső sarokban: 2 mp után eltűnik */
   #info { position:absolute; top:8px; left:8px; max-width:55vw; pointer-events:none; z-index:4;
-          background:rgba(0,0,0,.55); border-radius:12px; padding:5px 10px; font-size:14px; line-height:1.3; }
+          background:rgba(0,0,0,.55); border-radius:12px; padding:5px 10px; font-size:14px; line-height:1.3;
+          opacity:0; transition:opacity .25s; }
+  #info.show { opacity:1; }
   #info .fn { font-size:12px; color:#bbb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-  /* Gombpanel: a kép megérintésére jön elő, jobb oldalt oszlopban. Legfelül: Vissza, Mentés */
-  #cats { position:absolute; top:8px; right:8px; bottom:8px; display:none; direction:rtl;
+  /* Gombpanel: a kép megérintésére jön elő. A tartó átlátszik az érintésnek, csak a gombok fogják meg. */
+  #cats { position:absolute; top:8px; right:8px; bottom:8px; display:none; direction:rtl; pointer-events:none;
           grid-auto-flow:column; grid-auto-columns:max-content; gap:6px; align-content:start; z-index:5;
           max-width:calc(100% - 16px); }
   #cats.open { display:grid; }
-  #cats button { direction:ltr; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-                 max-width:70vw; padding:18px 24px; font-size:25px; font-weight:600; border-radius:14px;
-                 background:rgba(34,34,34,.93); border-color:#666; }
+  #cats button, #bprev { direction:ltr; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+                 height:var(--bh); line-height:calc(var(--bh) - 4px); padding:0 22px; font-size:var(--bfs); font-weight:600;
+                 border-radius:14px; background:rgba(34,34,34,.93); border:1px solid #666; color:var(--fg); max-width:70vw; }
+  #cats button { pointer-events:auto; }
+  #bprev { display:inline-block; margin:6px 0; background:#2a2a2a; }
   #cats button.act { background:rgba(60,60,70,.95); border-color:#999; }
   #cats button.save { background:rgba(61,139,253,.95); border-color:var(--acc); }
 
-  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:20px; display:none; z-index:9; max-width:90vw; text-align:center; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#000c; padding:8px 14px; border-radius:20px; display:none; z-index:9; max-width:90vw; text-align:center; pointer-events:none; }
 </style>
 </head>
 <body>
 
 <div id="setup">
   <h2>Képválogató <span id="ver" style="font-size:.6em;font-weight:400;color:#aaa"></span></h2>
-  <div id="upd"><div id="updTxt"></div><small>A kiválasztott képeket frissítés után újra ki kell választanod, a besorolásaid megmaradnak.</small><button class="acc" id="updBtn">⟳ Frissítés</button></div>
+  <div id="upd"><div id="updTxt"></div><small>A kiválasztott képeket frissítés után újra ki kell választanod, a besorolásaid megmaradnak.</small>
+    <button class="acc" id="updBtn">⟳ Frissítés</button></div>
   <div class="row"><button class="acc" id="pick">📷 Képek kiválasztása</button></div>
   <input type="file" id="files"
          accept="image/*,.jpg,.jpeg,.jfif,.pjpeg,.pjp,.png,.webp,.gif,.bmp,.avif"
@@ -62,6 +70,14 @@
     <button id="importCats">Kategóriák betöltése txt-ből</button>
     <input type="file" id="catFile" accept=".txt,text/plain" hidden>
   </div>
+
+  <h3>Mappagombok mérete <small>(ezen az eszközön külön tárolja)</small></h3>
+  <div class="slider"><label for="bh">Magasság: <b id="bhVal"></b></label>
+    <input type="range" id="bh" min="40" max="140" step="2"></div>
+  <div class="slider"><label for="bw">Szélesség: <b id="bwVal"></b></label>
+    <input type="range" id="bw" min="0" max="500" step="10"></div>
+  <div id="bprev">Minta mappa</div>
+  <div class="row"><button id="bdef">Alaphelyzet</button></div>
 
   <div class="row"><button class="acc" id="start">▶ Indítás</button></div>
   <div class="row">
@@ -83,12 +99,13 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const VERSION = 'v1.6';
+const VERSION = 'v1.7';
 $('ver').textContent = VERSION;
 document.title = 'Képválogató ' + VERSION;
-const LS_CATS = 'kv_cats', LS_ASSIGN = 'kv_assign';
+const LS_CATS = 'kv_cats', LS_ASSIGN = 'kv_assign', LS_BTN = 'kv_btn';
 const IMG_EXT = /\.(jpe?g|jfif|pjpe?g|pjp|png|webp|gif|bmp|avif|heic|heif)$/i;
 const ZOOM = 2.5;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 let files = [];            // minden betöltött kép, névsorban
 let queue = [];            // csak a MÉG BESOROLATLAN képek (ezek között lapozunk)
 let qi = 0;                // aktuális hely a sorban
@@ -97,6 +114,8 @@ let cats = [];
 let assign = {};           // fájlnév -> kategória
 let history = [];          // [{file}] a visszavonáshoz
 const urls = new Map();    // kép -> objektum URL (csak az előző/aktuális/következő él)
+let suppressUntil = 0;     // elhúzás után ennyi ideig nem fogad el gombnyomást
+let btn = {h:68, w:0};     // mappagombok mérete (w=0: automatikus szélesség)
 
 const natural = (a, b) => a.name.localeCompare(b.name, undefined, {numeric:true, sensitivity:'base'});
 const isImage = f => (f.type && f.type.startsWith('image/')) || IMG_EXT.test(f.name);
@@ -104,6 +123,11 @@ const isImage = f => (f.type && f.type.startsWith('image/')) || IMG_EXT.test(f.n
 function load() {
   try { assign = JSON.parse(localStorage.getItem(LS_ASSIGN) || '{}'); } catch { assign = {}; }
   $('catText').value = localStorage.getItem(LS_CATS) || '';
+  try {
+    const o = JSON.parse(localStorage.getItem(LS_BTN) || 'null');
+    if (o) { btn.h = clamp(+o.h || 68, 40, 140); btn.w = clamp(+o.w || 0, 0, 500); }
+  } catch {}
+  applyBtn();
   updateStat();
 }
 function saveAssign() { try { localStorage.setItem(LS_ASSIGN, JSON.stringify(assign)); } catch {} }
@@ -117,6 +141,21 @@ function loadedSummary() {
   const done = files.filter(f => assign[f.name]).length;
   return `${files.length} kép betöltve, ebből ${done} már besorolva (ezeket nem mutatja), ${files.length - done} maradt.`;
 }
+
+// ---- mappagombok mérete (eszközönként a böngésző tárolja) ----
+function applyBtn() {
+  const r = document.documentElement.style;
+  r.setProperty('--bh', btn.h + 'px');
+  r.setProperty('--bfs', Math.round(clamp(btn.h * 0.37, 14, 36)) + 'px');
+  $('bh').value = btn.h; $('bw').value = btn.w;
+  $('bhVal').textContent = btn.h + ' px';
+  $('bwVal').textContent = btn.w ? btn.w + ' px' : 'automatikus (a név hossza szerint)';
+  $('bprev').style.width = btn.w ? `min(${btn.w}px, 100%)` : 'auto';
+}
+function saveBtn() { try { localStorage.setItem(LS_BTN, JSON.stringify(btn)); } catch {} }
+$('bh').oninput = () => { btn.h = +$('bh').value; saveBtn(); applyBtn(); };
+$('bw').oninput = () => { btn.w = +$('bw').value; saveBtn(); applyBtn(); };
+$('bdef').onclick = () => { btn = {h:68, w:0}; saveBtn(); applyBtn(); };
 
 $('pick').onclick = () => $('files').click();
 $('files').onchange = e => {
@@ -149,7 +188,7 @@ $('start').onclick = () => {
   buildPanel();
   $('setup').style.display = 'none'; $('work').style.display = 'flex';
   show();
-  toast('Koppints a képre a mappákhoz · húzd el a lapozáshoz · dupla koppintás = nagyítás', 4000);
+  toast('Koppints a képre a mappákhoz (újra koppintva eltűnnek) · húzd el a lapozáshoz · dupla koppintás = nagyítás · jobbra-vissza húzás = fájlnév', 5000);
 };
 
 // ---- gombpanel: Vissza, Mentés, majd a mappák ----
@@ -159,7 +198,7 @@ function buildPanel() {
   const mk = (label, cls, fn) => {
     const b = document.createElement('button');
     b.textContent = label; if (cls) b.className = cls;
-    b.onclick = ev => { ev.stopPropagation(); fn(); };
+    b.onclick = ev => { ev.stopPropagation(); if (Date.now() < suppressUntil) return; fn(); };
     box.appendChild(b);
   };
   mk('↩ Vissza', 'act', undo);
@@ -169,10 +208,11 @@ function buildPanel() {
 function openCats() {
   const box = $('cats');
   box.classList.add('open');
-  const first = box.firstElementChild; if (!first) return;
-  const bh = first.offsetHeight + 6;
-  const rows = Math.max(1, Math.floor(($('stage').clientHeight - 16 + 6) / bh));
-  box.style.gridTemplateRows = `repeat(${rows}, auto)`;
+  // az oszlopok szükség esetén összébb húzódnak, hogy a panel ne lógjon ki a képernyőről
+  box.style.gridAutoColumns = btn.w ? `minmax(0, ${btn.w}px)` : 'minmax(0, max-content)';
+  // ahány gomb csak elfér egy oszlopban (a gombok magassága rögzített, így pontos)
+  const rows = Math.max(1, Math.floor(($('stage').clientHeight - 16 + 6) / (btn.h + 6)));
+  box.style.gridTemplateRows = `repeat(${rows}, ${btn.h}px)`;
 }
 function closeCats() { $('cats').classList.remove('open'); }
 
@@ -186,8 +226,8 @@ function clampPan() {
   if (!nw || !nh) { tx = ty = 0; return; }
   const W = st.clientWidth, H = st.clientHeight, s0 = Math.min(W / nw, H / nh);
   const mx = Math.max(0, (nw * s0 * zoom - W) / 2), my = Math.max(0, (nh * s0 * zoom - H) / 2);
-  tx = Math.max(-mx, Math.min(mx, tx));
-  ty = Math.max(-my, Math.min(my, ty));
+  tx = clamp(tx, -mx, mx);
+  ty = clamp(ty, -my, my);
 }
 function toggleZoom(x, y) {
   closeCats();
@@ -200,7 +240,16 @@ function toggleZoom(x, y) {
   clampPan(); applyZoom();
 }
 
-// ---- érintés: koppintás, dupla koppintás, elhúzás ----
+// ---- tájékoztató (kép sorszáma, fájlneve): 2 mp-ig látszik ----
+let infoTimer;
+function showInfo(ms = 2000) {
+  const el = $('info');
+  el.classList.add('show');
+  clearTimeout(infoTimer);
+  infoTimer = setTimeout(() => el.classList.remove('show'), ms);
+}
+
+// ---- érintés: koppintás, dupla koppintás, elhúzás, jobbra-vissza húzás ----
 let ptr = null, lastTap = null, tapTimer = null;
 const st = $('stage');
 function cancelTap() { clearTimeout(tapTimer); lastTap = null; }
@@ -216,26 +265,35 @@ function tap(x, y) {
   }, 280);
 }
 st.addEventListener('pointerdown', e => {
-  if (e.target.closest('#cats') || e.isPrimary === false) { ptr = null; return; }
-  ptr = {x:e.clientX, y:e.clientY, sx:tx, sy:ty, moved:false};
-  try { st.setPointerCapture(e.pointerId); } catch {}
+  if (e.isPrimary === false) { ptr = null; return; }
+  const onBtn = !!e.target.closest('#cats button');
+  ptr = {x:e.clientX, y:e.clientY, sx:tx, sy:ty, moved:false, max:0, onBtn};
+  if (!onBtn) { try { st.setPointerCapture(e.pointerId); } catch {} }
 });
 st.addEventListener('pointermove', e => {
-  if (!ptr || zoom <= 1) return;         // nagyítva: húzás = a kép mozgatása
+  if (!ptr) return;
   const dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
+  ptr.max = Math.max(ptr.max, Math.abs(dx));
   if (Math.abs(dx) > 8 || Math.abs(dy) > 8) ptr.moved = true;
-  tx = ptr.sx + dx; ty = ptr.sy + dy; clampPan(); applyZoom();
+  if (zoom > 1 && !ptr.onBtn) {          // nagyítva: húzás = a kép mozgatása
+    tx = ptr.sx + dx; ty = ptr.sy + dy; clampPan(); applyZoom();
+  }
 });
 st.addEventListener('pointercancel', () => { ptr = null; });
 st.addEventListener('pointerup', e => {
   if (!ptr) return;
   const p = ptr; ptr = null;
   const dx = e.clientX - p.x, dy = e.clientY - p.y;
-  if (zoom > 1 && p.moved) return;
+  if (zoom > 1 && !p.onBtn && p.moved) return;
+  // elhúzás (a gombokon is): lapozás
   if (zoom === 1 && Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy)) {
+    suppressUntil = Date.now() + 400;
     go(dx < 0 ? 1 : -1);                 // balra húzás = következő, jobbra húzás = előző
     return;
   }
+  if (p.onBtn) return;                   // a gombnyomást a gomb saját kezelője intézi
+  // jobbra majd vissza húzás (ugyanazon érintés alatt): a fájlnév megjelenik
+  if (zoom === 1 && p.max > 40 && Math.abs(dx) < 30 && Math.abs(dy) < 40) { showInfo(3000); return; }
   if (Math.abs(dx) < 15 && Math.abs(dy) < 15) tap(e.clientX, e.clientY);
 });
 
@@ -258,10 +316,11 @@ function show() {
   resetZoom();
   const f = queue[qi];
   const img = $('img');
-  if (!f) { img.removeAttribute('src'); updateInfo(); return; }
+  updateInfo();
+  if (!f) { img.removeAttribute('src'); showInfo(6000); return; }
+  showInfo(2000);
   img.onerror = () => toast('Nem jeleníthető meg: ' + f.name, 2500);
   img.src = urlFor(f);
-  updateInfo();
   // a szomszédos képeket előre betölti, hogy a lapozás gyors legyen
   for (const n of [queue[qi + 1], queue[qi - 1]]) if (n) { const im = new Image(); im.src = urlFor(n); }
   pruneUrls();
@@ -319,6 +378,7 @@ function saveTxt() {
 }
 function toSetup() {
   cancelTap(); closeCats(); resetZoom();
+  clearTimeout(infoTimer); $('info').classList.remove('show');
   for (const u of urls.values()) URL.revokeObjectURL(u);
   urls.clear();
   $('work').style.display = 'none'; $('setup').style.display = 'block';
@@ -347,6 +407,7 @@ $('cp').onclick = async () => {
 $('reset').onclick = () => {
   if (confirm('Biztosan törlöd az összes eddigi besorolást?')) { assign = {}; saveAssign(); updateStat(); }
 };
+
 // ---- frissítésellenőrzés ----
 // Letölti a saját fájlját a gyorsítótár megkerülésével, és megnézi a verziószámot.
 // Csak jelez, magától sosem tölt újra.
